@@ -29,7 +29,6 @@ import {
   AlertCircle,
   X,
   ArrowLeft,
-  Copy,
 } from 'lucide-react';
 
 interface NovoPacienteFormProps {
@@ -107,13 +106,6 @@ export const NovoPacienteForm: React.FC<NovoPacienteFormProps> = ({
   // Telefone / WhatsApp com máscara
   const handlePhoneChange = (field: 'telefone' | 'whatsapp', val: string) => {
     handleChange(field, formatPhone(val));
-  };
-
-  // Copiar telefone para whatsapp
-  const handleCopyPhoneToWhatsapp = () => {
-    if (formData.telefone) {
-      handleChange('whatsapp', formData.telefone);
-    }
   };
 
   // Conversão de horário ao desfocar do input
