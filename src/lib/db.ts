@@ -1,9 +1,13 @@
 import { neon } from '@neondatabase/serverless';
 import { Nutricionista } from '../types/auth';
 
-const DATABASE_URL = import.meta.env.VITE_DATABASE_URL || 'postgresql://neondb_owner:npg_cgmQ4Mpt0xfZ@ep-red-king-b6bu7owl-pooler.c-2.sa-east-1.aws.neon.tech/neondb?sslmode=require';
+const DATABASE_URL = import.meta.env.VITE_DATABASE_URL;
 
-export const sql = neon(DATABASE_URL);
+if (!DATABASE_URL) {
+  console.warn('VITE_DATABASE_URL não configurada no ambiente.');
+}
+
+export const sql = neon(DATABASE_URL || '');
 
 /**
  * Salva ou atualiza os dados do nutricionista na tabela `public.nutricionistas`
@@ -411,4 +415,25 @@ export async function getPlanosAlimentaresByPacienteId(pacienteId: string) {
     return [];
   }
 }
+
+/**
+ * Salva um novo plano alimentar para o paciente
+ */
+export async function createPlanoAlimentar(pacienteId: string, conteudo: any) {
+  try {
+    const rows = await sql`
+      INSERT INTO planos_alimentares (paciente_id, conteudo)
+      VALUES (${pacienteId}, ${conteudo})
+      RETURNING *;
+    `;
+    if (rows && rows.length > 0) {
+      return rows[0] as import('../types/dashboard').PlanoAlimentar;
+    }
+    throw new Error('Falha ao salvar plano alimentar.');
+  } catch (error) {
+    console.error('Erro ao salvar plano alimentar no banco:', error);
+    throw error;
+  }
+}
+
 

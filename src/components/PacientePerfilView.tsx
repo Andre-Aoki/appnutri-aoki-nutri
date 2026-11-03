@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { updatePaciente, getConsultasByPacienteId, getPlanosAlimentaresByPacienteId } from '../lib/db';
-import { Paciente, Consulta, PlanoAlimentar, NovoPacienteInput } from '../types/dashboard';
+import { updatePaciente, getConsultasByPacienteId, getPlanosAlimentaresByPacienteId, createPlanoAlimentar } from '../lib/db';
+import { Paciente, Consulta, PlanoAlimentar, PlanoAlimentarConteudo, NovoPacienteInput } from '../types/dashboard';
 import {
   calculateAge,
   calculateIMC,
@@ -17,6 +17,7 @@ import {
 } from '../lib/pacienteUtils';
 import { GraficoEvolucaoPeso } from './GraficoEvolucaoPeso';
 import { NovaConsultaModal } from './NovaConsultaModal';
+import { GeradorPlanoAlimentar } from './GeradorPlanoAlimentar';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
 import {
@@ -102,6 +103,60 @@ export const PacientePerfilView: React.FC<PacientePerfilViewProps> = ({
   const [loadingPlanos, setLoadingPlanos] = useState(false);
   const [selectedPlano, setSelectedPlano] = useState<PlanoAlimentar | null>(null);
 
+  // Estados do Gerador de Plano IA (Prompt 6)
+  const [gerandoPlano, setGerandoPlano] = useState(false);
+  const [loadingStepText, setLoadingStepText] = useState('Buscando dados do paciente...');
+  const [salvandoPlano, setSalvandoPlano] = useState(false);
+  const [planoEmEdicao, setPlanoEmEdicao] = useState<PlanoAlimentarConteudo | null>(null);
+  const [erroPlano, setErroPlano] = useState<string | null>(null);
+
+  // Efeito de mensagens dinâmicas durante o loading da IA
+  useEffect(() => {
+    if (!gerandoPlano) return;
+    const steps = [
+      'Buscando dados do paciente...',
+      'Analisando objetivos, restrições e alergias...',
+      'IA calculando cardápio semanal diversificado...',
+      'Estruturando 5 opções por refeição...',
+      'Finalizando plano alimentar...'
+    ];
+    let currentIdx = 0;
+    setLoadingStepText(steps[0]);
+    const timer = setInterval(() => {
+      currentIdx = (currentIdx + 1) % steps.length;
+      setLoadingStepText(steps[currentIdx]);
+    }, 2200);
+
+    return () => clearInterval(timer);
+  }, [gerandoPlano]);
+
+  // Função para criar estrutura manual padrão de contingência
+  const handleCriarPlanoManual = () => {
+    const diasSemana = [
+      'Segunda-feira',
+      'Terça-feira',
+      'Quarta-feira',
+      'Quinta-feira',
+      'Sexta-feira',
+      'Sábado',
+      'Domingo'
+    ];
+    const novoPlanoManual: PlanoAlimentarConteudo = {
+      plano_semanal: diasSemana.map(dia => ({
+        dia,
+        refeicoes: {
+          cafe_da_manha: ['', '', '', '', ''],
+          lanche_manha: ['', '', '', '', ''],
+          almoco: ['', '', '', '', ''],
+          lanche_tarde: ['', '', '', '', ''],
+          jantar: ['', '', '', '', '']
+        }
+      }))
+    };
+    setPlanoEmEdicao(novoPlanoManual);
+    setErroPlano(null);
+  };
+
   // Notificações e feedback
   const [isSaving, setIsSaving] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -137,6 +192,86 @@ export const PacientePerfilView: React.FC<PacientePerfilViewProps> = ({
       console.error('Erro ao buscar planos:', err);
     } finally {
       setLoadingPlanos(false);
+    }
+  };
+
+  // Gerar Plano Alimentar com IA (Prompt 6)
+  const handleGerarPlano = async () => {
+    try {
+      setGerandoPlano(true);
+      setErroPlano(null);
+
+      // Pega o peso mais recente da consulta ou peso inicial
+      const ultimaConsultaComPeso = consultas.find(c => c.peso !== null && c.peso !== undefined && c.peso !== '');
+      const pesoMaisRecente = ultimaConsultaComPeso ? ultimaConsultaComPeso.peso : formData.peso_inicial;
+
+      // Prepara os dados atuais do paciente
+      const pacientePayload = {
+        id: paciente.id,
+        nome: formData.nome,
+        idade: idade || undefined,
+        sexo: formData.sexo,
+        altura: formData.altura,
+        peso_atual: pesoMaisRecente,
+        objetivo: formData.objetivo_texto || (formData.objetivos && formData.objetivos.join(', ')) || '',
+        nivel_atividade: formData.nivel_atividade,
+        atividade_fisica: formData.atividade_fisica,
+        atividade_fisica_descricao: formData.atividade_fisica_descricao,
+        restricoes_alimentares: formData.restricoes_alimentares,
+        alergias: formData.alergias,
+        patologias: formData.patologias,
+        medicamentos: formData.medicamentos,
+        suplementos: formData.suplementos,
+        litros_agua: formData.litros_agua,
+        refeicoes_por_dia: formData.refeicoes_por_dia,
+        horario_acorda: formData.horario_acorda,
+        horario_dorme: formData.horario_dorme,
+        observacoes: formData.observacoes,
+      };
+
+      const res = await fetch('/api/gerar-plano', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(pacientePayload),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || `Erro na requisição (${res.status})`);
+      }
+
+      const data: PlanoAlimentarConteudo = await res.json();
+      if (!data?.plano_semanal || !Array.isArray(data.plano_semanal)) {
+        throw new Error('A IA não retornou o plano alimentar no formato esperado.');
+      }
+
+      setPlanoEmEdicao(data);
+    } catch (err: any) {
+      console.error('Erro ao gerar plano alimentar com IA:', err);
+      setErroPlano('Não foi possível gerar o plano com IA no momento. Deseja tentar novamente ou criar um Plano Manual?');
+    } finally {
+      setGerandoPlano(false);
+    }
+  };
+
+  // Salvar Plano Alimentar no Neon/Supabase (Prompt 6)
+  const handleSalvarPlano = async (planoParaSalvar: PlanoAlimentarConteudo) => {
+    try {
+      setSalvandoPlano(true);
+      setErroPlano(null);
+
+      await createPlanoAlimentar(paciente.id, planoParaSalvar);
+
+      setSuccessMessage('Plano alimentar gerado e salvo com sucesso!');
+      setPlanoEmEdicao(null);
+      await loadPlanos();
+    } catch (err: any) {
+      console.error('Erro ao salvar plano:', err);
+      setErroPlano(err.message || 'Erro ao salvar o plano alimentar no banco de dados.');
+    } finally {
+      setSalvandoPlano(false);
     }
   };
 
@@ -1224,117 +1359,274 @@ export const PacientePerfilView: React.FC<PacientePerfilViewProps> = ({
           SEÇÃO 3 — PLANOS ALIMENTARES
          ========================================================================= */}
       {activeSection === 'planos' && (
-        <div className="bg-white rounded-3xl border border-slate-200/80 p-6 sm:p-7 shadow-xs space-y-6 animate-fadeIn">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-5">
-            <div className="flex items-center gap-2.5">
-              <div className="p-2 bg-emerald-50 text-emerald-600 rounded-xl border border-emerald-100">
-                <FileText className="w-5 h-5" />
+        <div className="space-y-6 animate-fadeIn">
+          {/* Mensagem de Erro de Geração/Salvamento se houver */}
+          {erroPlano && (
+            <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs animate-fadeIn">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+                <span className="font-medium">{erroPlano}</span>
               </div>
-              <div>
-                <h3 className="text-base font-bold text-slate-900">
-                  Planos Alimentares do Paciente
-                </h3>
-                <p className="text-xs text-slate-500">
-                  Dietas personalizadas, cardápios e prescrições nutricionais
-                </p>
-              </div>
-            </div>
-
-            {/* Botão Gerar Plano Alimentar (visível conforme Prompt 5) */}
-            <div className="relative group">
-              <Button
-                variant="primary"
-                size="md"
-                leftIcon={<Sparkles className="w-4 h-4 text-emerald-200 animate-pulse" />}
-                className="shadow-md shadow-emerald-600/20 bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-700 hover:to-green-700"
-                onClick={() => {
-                  alert('O gerador inteligente de planos alimentares será ativado no Prompt 6!');
-                }}
-              >
-                Gerar Plano Alimentar
-              </Button>
-            </div>
-          </div>
-
-          {/* Histórico de Planos Salvos */}
-          {loadingPlanos ? (
-            <div className="py-12 text-center text-slate-400 text-sm">
-              Carregando planos alimentares...
-            </div>
-          ) : planos.length === 0 ? (
-            /* Regra: "Se não houver planos salvos ainda, exibir a mensagem 'Nenhum plano alimentar gerado ainda'" */
-            <div className="py-16 text-center bg-slate-50/50 rounded-2xl border border-dashed border-slate-200 space-y-3">
-              <div className="w-14 h-14 bg-slate-100 text-slate-400 rounded-2xl flex items-center justify-center mx-auto">
-                <FileText className="w-7 h-7" />
-              </div>
-              <h4 className="text-base font-bold text-slate-800">
-                Nenhum plano alimentar gerado ainda
-              </h4>
-              <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                Os planos nutricionais gerados para este paciente aparecerão listados aqui em ordem cronológica decrescente.
-              </p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {planos.map((plano) => (
-                <div
-                  key={plano.id}
-                  onClick={() => setSelectedPlano(plano)}
-                  className="p-5 rounded-2xl border border-slate-200/80 hover:border-emerald-300 hover:bg-emerald-50/30 cursor-pointer transition-all shadow-xs space-y-3 group"
+              <div className="flex items-center gap-2 shrink-0">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleGerarPlano}
+                  disabled={gerandoPlano}
+                  className="bg-white border-rose-300 text-rose-800 hover:bg-rose-100"
                 >
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
-                      Plano Alimentar
-                    </span>
-                    <span className="text-xs text-slate-400">
-                      {formatDateDisplay(plano.created_at)}
-                    </span>
-                  </div>
-
-                  <p className="text-xs text-slate-600 line-clamp-3">
-                    {typeof plano.conteudo === 'string'
-                      ? plano.conteudo
-                      : JSON.stringify(plano.conteudo, null, 2)}
-                  </p>
-
-                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs font-semibold text-emerald-700 group-hover:text-emerald-800">
-                    <span>Ver detalhes completos</span>
-                    <Eye className="w-4 h-4" />
-                  </div>
-                </div>
-              ))}
+                  Tentar novamente
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={handleCriarPlanoManual}
+                  className="bg-rose-700 hover:bg-rose-800 text-white"
+                >
+                  Criar Plano Manual
+                </Button>
+                <button
+                  type="button"
+                  onClick={() => setErroPlano(null)}
+                  className="text-rose-400 hover:text-rose-700 p-1"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           )}
 
-          {/* Modal para Visualização de Plano Salvo */}
+          {/* Área de Edição do Plano Recém-Gerado com IA */}
+          {planoEmEdicao && (
+            <GeradorPlanoAlimentar
+              planoInicial={planoEmEdicao}
+              onSalvar={handleSalvarPlano}
+              onCancelar={() => setPlanoEmEdicao(null)}
+              salvando={salvandoPlano}
+              pacienteNome={formData.nome}
+            />
+          )}
+
+          {/* Card Geral e Histórico */}
+          <div className="bg-white rounded-3xl border border-slate-200/80 p-6 sm:p-7 shadow-xs space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-5">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-emerald-50 text-emerald-600 rounded-xl border border-emerald-100">
+                  <FileText className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">
+                    Planos Alimentares do Paciente
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Dietas personalizadas geradas com IA ou registradas no prontuário
+                  </p>
+                </div>
+              </div>
+
+              {/* Botão Gerar Plano com IA em Destaque */}
+              <div className="relative group">
+                <Button
+                  variant="primary"
+                  size="md"
+                  leftIcon={<Sparkles className="w-4 h-4 text-emerald-200 animate-pulse" />}
+                  className="shadow-md shadow-emerald-600/20 bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-700 hover:to-green-700 text-white font-bold"
+                  onClick={handleGerarPlano}
+                  isLoading={gerandoPlano}
+                  disabled={gerandoPlano}
+                >
+                  {gerandoPlano ? 'Gerando Plano com IA...' : '✨ Gerar Plano com IA'}
+                </Button>
+              </div>
+            </div>
+
+            {/* Loading Indicator ao Gerar com mensagens dinâmicas */}
+            {gerandoPlano && (
+              <div className="py-12 px-4 text-center bg-emerald-50/40 rounded-3xl border border-dashed border-emerald-300 space-y-3 animate-pulse">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto shadow-inner">
+                  <Sparkles className="w-6 h-6 animate-spin" />
+                </div>
+                <h4 className="text-sm font-bold text-emerald-950">
+                  {loadingStepText}
+                </h4>
+                <p className="text-xs text-slate-500 max-w-md mx-auto">
+                  Analisando dados clínicos, metas, alergias e restrições de {formData.nome} para formular o cardápio semanal completo.
+                </p>
+              </div>
+            )}
+
+            {/* Histórico de Planos Salvos */}
+            {loadingPlanos ? (
+              <div className="py-12 text-center text-slate-400 text-sm">
+                Carregando planos alimentares...
+              </div>
+            ) : planos.length === 0 ? (
+              /* Regra: "Se não houver planos salvos ainda, exibir a mensagem 'Nenhum plano alimentar gerado ainda'" */
+              <div className="py-16 text-center bg-slate-50/50 rounded-2xl border border-dashed border-slate-200 space-y-3">
+                <div className="w-14 h-14 bg-slate-100 text-slate-400 rounded-2xl flex items-center justify-center mx-auto">
+                  <FileText className="w-7 h-7" />
+                </div>
+                <h4 className="text-base font-bold text-slate-800">
+                  Nenhum plano alimentar gerado ainda
+                </h4>
+                <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                  Clique no botão acima "Gerar Plano Alimentar" para gerar automaticamente uma prescrição semanal completa via IA.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                    Histórico de Prescrições ({planos.length})
+                  </span>
+                  <span className="text-xs text-slate-400">
+                    Mais recentes primeiro
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {planos.map((plano) => {
+                    const temPlanoSemanal =
+                      plano.conteudo &&
+                      typeof plano.conteudo === 'object' &&
+                      Array.isArray(plano.conteudo.plano_semanal);
+
+                    return (
+                      <div
+                        key={plano.id}
+                        onClick={() => setSelectedPlano(plano)}
+                        className="p-5 rounded-2xl border border-slate-200/80 hover:border-emerald-400 hover:bg-emerald-50/20 cursor-pointer transition-all shadow-xs space-y-3 group bg-white"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
+                            Plano Alimentar Semanal
+                          </span>
+                          <span className="text-xs text-slate-400">
+                            {formatDateDisplay(plano.created_at)}
+                          </span>
+                        </div>
+
+                        {temPlanoSemanal ? (
+                          <div className="space-y-1">
+                            <p className="text-xs font-semibold text-slate-700">
+                              {plano.conteudo.plano_semanal.length} dias planejados (5 opções por refeição)
+                            </p>
+                            <p className="text-[11px] text-slate-500 line-clamp-2">
+                              {plano.conteudo.plano_semanal
+                                .map((d: any) => d.dia)
+                                .join(' • ')}
+                            </p>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-slate-600 line-clamp-3">
+                            {typeof plano.conteudo === 'string'
+                              ? plano.conteudo
+                              : JSON.stringify(plano.conteudo, null, 2)}
+                          </p>
+                        )}
+
+                        <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs font-semibold text-emerald-700 group-hover:text-emerald-800">
+                          <span>Visualizar cardápio completo</span>
+                          <Eye className="w-4 h-4" />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Modal para Visualização Detalhada do Plano Salvo */}
           {selectedPlano && (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
               <div
-                className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs"
+                className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs"
                 onClick={() => setSelectedPlano(null)}
               />
-              <div className="relative bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-2xl w-full z-10 p-6 space-y-4 max-h-[85vh] overflow-y-auto">
-                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                  <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                    <FileText className="w-5 h-5 text-emerald-600" />
-                    Plano Alimentar de {formData.nome}
-                  </h3>
+              <div className="relative bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-4xl w-full z-10 p-6 sm:p-8 space-y-5 max-h-[88vh] overflow-y-auto">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 bg-emerald-50 text-emerald-700 rounded-2xl border border-emerald-200">
+                      <FileText className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold text-slate-900">
+                        Plano Alimentar de {formData.nome}
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Gerado e registrado em {formatDateDisplay(selectedPlano.created_at)}
+                      </p>
+                    </div>
+                  </div>
                   <button
                     onClick={() => setSelectedPlano(null)}
-                    className="p-1 rounded-lg text-slate-400 hover:text-slate-700"
+                    className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-all"
                   >
                     <X className="w-5 h-5" />
                   </button>
                 </div>
-                <div className="text-xs text-slate-500">
-                  Gerado em: {formatDateDisplay(selectedPlano.created_at)}
-                </div>
-                <pre className="p-4 rounded-2xl bg-slate-50 text-slate-800 text-xs font-mono whitespace-pre-wrap overflow-x-auto border border-slate-200/80">
-                  {typeof selectedPlano.conteudo === 'string'
-                    ? selectedPlano.conteudo
-                    : JSON.stringify(selectedPlano.conteudo, null, 2)}
-                </pre>
-                <div className="flex justify-end pt-2">
+
+                {/* Exibição Estruturada se for plano_semanal */}
+                {selectedPlano.conteudo?.plano_semanal &&
+                Array.isArray(selectedPlano.conteudo.plano_semanal) ? (
+                  <div className="space-y-6">
+                    {selectedPlano.conteudo.plano_semanal.map((diaItem: any, dIdx: number) => (
+                      <div
+                        key={dIdx}
+                        className="rounded-2xl border border-slate-200/80 bg-slate-50/50 p-4 space-y-3"
+                      >
+                        <div className="flex items-center justify-between pb-2 border-b border-slate-200/60">
+                          <span className="text-sm font-bold text-slate-900">
+                            {diaItem.dia}
+                          </span>
+                          <span className="text-xs text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-100">
+                            Dia {dIdx + 1}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                          {diaItem.refeicoes &&
+                            Object.entries(diaItem.refeicoes).map(([refeicaoNome, opcoes]: [string, any]) => {
+                              const labelsRefeicao: Record<string, string> = {
+                                cafe_da_manha: 'Café da manhã',
+                                lanche_manha: 'Lanche da manhã',
+                                almoco: 'Almoço',
+                                lanche_tarde: 'Lanche da tarde',
+                                jantar: 'Jantar',
+                              };
+                              return (
+                                <div
+                                  key={refeicaoNome}
+                                  className="bg-white rounded-xl border border-slate-200/70 p-3 space-y-1.5 text-xs shadow-2xs"
+                                >
+                                  <span className="font-bold text-slate-700 block uppercase text-[10px] tracking-wider">
+                                    {labelsRefeicao[refeicaoNome] || refeicaoNome}
+                                  </span>
+                                  <ul className="space-y-1 text-slate-600 list-disc list-inside">
+                                    {Array.isArray(opcoes) &&
+                                      opcoes.map((opcao: string, opI: number) => (
+                                        <li key={opI} className="text-[11px] leading-relaxed">
+                                          {opcao || 'Opção não definida'}
+                                        </li>
+                                      ))}
+                                  </ul>
+                                </div>
+                              );
+                            })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <pre className="p-4 rounded-2xl bg-slate-50 text-slate-800 text-xs font-mono whitespace-pre-wrap overflow-x-auto border border-slate-200/80">
+                    {typeof selectedPlano.conteudo === 'string'
+                      ? selectedPlano.conteudo
+                      : JSON.stringify(selectedPlano.conteudo, null, 2)}
+                  </pre>
+                )}
+
+                <div className="flex justify-end pt-3 border-t border-slate-100">
                   <Button variant="outline" size="sm" onClick={() => setSelectedPlano(null)}>
                     Fechar
                   </Button>

@@ -79,10 +79,27 @@ export interface NovaConsultaInput {
   proximo_retorno?: string | null;
 }
 
+export interface RefeicoesDia {
+  cafe_da_manha: string[];
+  lanche_manha: string[];
+  almoco: string[];
+  lanche_tarde: string[];
+  jantar: string[];
+}
+
+export interface DiaPlanoAlimentar {
+  dia: string;
+  refeicoes: RefeicoesDia;
+}
+
+export interface PlanoAlimentarConteudo {
+  plano_semanal: DiaPlanoAlimentar[];
+}
+
 export interface PlanoAlimentar {
   id: string;
   paciente_id: string;
-  conteudo: any;
+  conteudo: PlanoAlimentarConteudo | any;
   created_at: string | Date;
 }
 

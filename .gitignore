@@ -10,10 +10,12 @@ build/
 
 # Variáveis de ambiente - NUNCA commitar o .env com chaves reais!
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env.*
+!.env.example
+
+# Prompts e docs locais
+_prompts/
+_prompt/
 
 # Logs
 npm-debug.log*
