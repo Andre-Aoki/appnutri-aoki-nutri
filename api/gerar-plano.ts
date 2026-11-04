@@ -141,33 +141,51 @@ O formato do JSON retornado deve seguir exatamente esta estrutura:
   ]
 }`;
 
+  const candidateModels = [
+    process.env.GEMINI_MODEL,
+    'gemini-3.8-flash',
+    'gemini-3.5-flash',
+    'gemini-3.7-flash',
+    'gemini-flash-latest'
+  ].filter(Boolean) as string[];
+
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
-    
-    // Tenta primeiro modelo gemini-2.5-flash / gemini-2.0-flash ou modelo configurável
-    const model = genAI.getGenerativeModel({
-      model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
-      generationConfig: {
-        responseMimeType: 'application/json',
-        responseSchema: planoAlimentarSchema,
-        temperature: 0.4,
-      },
-    });
+    let lastError: any = null;
+    let jsonParsed: any = null;
 
-    const result = await model.generateContent(promptFinal);
-    const responseText = result.response.text();
+    for (const modelName of candidateModels) {
+      try {
+        const model = genAI.getGenerativeModel({
+          model: modelName,
+          generationConfig: {
+            responseMimeType: 'application/json',
+            responseSchema: planoAlimentarSchema,
+            temperature: 0.4,
+          },
+        });
 
-    let jsonParsed;
-    try {
-      jsonParsed = JSON.parse(responseText);
-    } catch {
-      // Limpeza de contingência caso venha com acidental markdown
-      const cleaned = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
-      jsonParsed = JSON.parse(cleaned);
+        const result = await model.generateContent(promptFinal);
+        const responseText = result.response.text();
+
+        try {
+          jsonParsed = JSON.parse(responseText);
+        } catch {
+          const cleaned = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
+          jsonParsed = JSON.parse(cleaned);
+        }
+
+        if (jsonParsed && Array.isArray(jsonParsed.plano_semanal)) {
+          break; // Sucesso na geração
+        }
+      } catch (err: any) {
+        console.warn(`Tentativa com modelo ${modelName} falhou:`, err?.message || err);
+        lastError = err;
+      }
     }
 
     if (!jsonParsed || !Array.isArray(jsonParsed.plano_semanal)) {
-      throw new Error('Formato retornado pelo Gemini é inválido.');
+      throw lastError || new Error('Formato retornado pelo Gemini é inválido.');
     }
 
     return res.status(200).json(jsonParsed);
